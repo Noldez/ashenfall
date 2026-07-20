@@ -20,7 +20,8 @@ public static class RpgMenu
         var c = session.Character;
         var steamId = c.SteamId;
         var toNext = c.Level >= XpCurve.MaxLevel ? 0 : XpCurve.XpForLevel(c.Level) - c.Xp;
-        var menu = Menu.Create()
+        Menu menu = null!;
+        menu = Menu.Create()
             .Title("Ashenfall")
             .DisabledItem($"{c.Name} - Level {c.Level} {c.Class}")
             .DisabledItem(c.Level >= XpCurve.MaxLevel ? "MAX LEVEL" : $"XP to next level: {toNext}")
@@ -39,8 +40,17 @@ public static class RpgMenu
                         {
                             if (!client.IsValid) return;
 
-                            var inv = BuildInventoryMenu(owned, client, session, menus, items, mainThreadInvoke, logger);
-                            menus.DisplayMenu(client, inv);
+                            var inv = BuildInventoryMenu(owned);
+
+                            // Navigate WITHIN the live session (ctrl.Next) instead of DisplayMenu:
+                            // replacing an open menu via DisplayMenu triggers the old controller's
+                            // deferred CloseClientMenu timer, which disposes the replacement a tick
+                            // later (menu flashes and vanishes). Next() also gives us a real back stack.
+                            if (menus.IsInCurrentMenu(client, menu))
+                                ctrl.Next(inv);
+                            else if (!menus.IsInMenu(client))
+                                menus.DisplayMenu(client, inv);
+                            // else: player is in some other menu now - do not stomp it.
                         });
                     }
                     catch (Exception e)
@@ -59,8 +69,7 @@ public static class RpgMenu
         menus.DisplayMenu(client, menu);
     }
 
-    private static Menu BuildInventoryMenu(IReadOnlyList<OwnedItem> owned, IGameClient client, PlayerSession session,
-        IMenuManager menus, ItemRepository items, Action<Action> mainThreadInvoke, ILogger logger)
+    private static Menu BuildInventoryMenu(IReadOnlyList<OwnedItem> owned)
     {
         var builder = Menu.Create().Title($"Inventory ({owned.Count})");
 
@@ -88,9 +97,10 @@ public static class RpgMenu
             }
         }
 
-        // DisplayMenu() always starts a fresh menu session for the client (see MenuManager.DisplayMenu),
-        // so there is no parent to GoBack() to here. Re-display the main menu instead.
-        builder.Item("Back", _ => Show(client, session, menus, items, mainThreadInvoke, logger));
+        // Reached via ctrl.Next(), so the back stack holds the main menu - BackItem just works.
+        // (In the rare fresh-DisplayMenu fallback the stack is empty and BackItem is hidden.)
+        builder.BackItem();
+        builder.ExitItem();
 
         return builder.Build();
     }
