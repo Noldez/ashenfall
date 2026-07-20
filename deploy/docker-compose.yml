@@ -1,0 +1,39 @@
+services:
+  ashenfall-db:
+    image: mariadb:11
+    container_name: ashenfall-db
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: ashenfall
+      MARIADB_USER: ashenfall
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "127.0.0.1:3310:3306"
+    volumes:
+      - /opt/ashenfall/db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      retries: 5
+
+  ashenfall-cs2:
+    image: joedwards32/cs2:latest
+    container_name: ashenfall-cs2
+    restart: unless-stopped
+    environment:
+      SRCDS_TOKEN: ${GSLT}
+      CS2_SERVERNAME: "Ashenfall RPG [LT]"
+      CS2_PORT: "27015"
+      CS2_RCONPW: ${RCON_PASSWORD}
+      CS2_MAXPLAYERS: "64"
+      CS2_STARTMAP: "de_dust2"
+      CS2_ADDITIONAL_ARGS: ""
+    ports:
+      - "27015:27015/tcp"
+      - "27015:27015/udp"
+    volumes:
+      - /opt/ashenfall/cs2-data:/home/steam/cs2-dedicated/
+    depends_on:
+      ashenfall-db:
+        condition: service_healthy
