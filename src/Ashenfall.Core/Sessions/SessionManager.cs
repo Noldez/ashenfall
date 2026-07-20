@@ -42,27 +42,44 @@ public sealed class SessionManager : IClientListener
     public void OnClientPutInServer(IGameClient client)
     {
         if (client.IsFakeClient) return;
+
         var steamId = client.SteamId.AsPrimitive();
+        var name = client.Name;
+
         _ = Task.Run(async () =>
         {
             try
             {
                 var character = await _characters.LoadAsync(steamId)
-                                ?? await _characters.CreateAsync(steamId, client.Name, "Marksman");
-                _sessions[steamId] = new PlayerSession { Client = client, Character = character };
-                client.Print(HudPrintChannel.Chat,
-                    $"[Ashenfall] Sveikas, {character.Name}! Level {character.Level} {character.Class}. Type !rpg");
+                                ?? await _characters.CreateAsync(steamId, name, "Marksman");
+
+                // Marshal back to the main thread before touching IGameClient or _sessions -
+                // the player may have disconnected while the DB call was in flight.
+                _shared.GetModSharp().InvokeAction(() =>
+                {
+                    if (!client.IsValid) return;
+
+                    _sessions[steamId] = new PlayerSession { Client = client, Character = character };
+                    client.Print(HudPrintChannel.Chat,
+                        $"[Ashenfall] Sveikas, {character.Name}! Level {character.Level} {character.Class}. Type !rpg");
+                });
             }
             catch (Exception e)
             {
                 _logger.LogError(e, "Load failed for {SteamId}", steamId);
-                client.Print(HudPrintChannel.Chat, "[Ashenfall] Character load failed, safe mode.");
+                _shared.GetModSharp().InvokeAction(() =>
+                {
+                    if (!client.IsValid) return;
+                    client.Print(HudPrintChannel.Chat, "[Ashenfall] Character load failed, safe mode.");
+                });
             }
         });
     }
 
     public void OnClientDisconnected(IGameClient client, NetworkDisconnectionReason reason)
     {
+        if (client.IsFakeClient) return;
+
         if (_sessions.TryRemove(client.SteamId.AsPrimitive(), out var s))
             _ = SaveQuietAsync(s);
     }
