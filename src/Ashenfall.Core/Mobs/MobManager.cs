@@ -10,6 +10,7 @@ using Sharp.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.GameEntities;
 using Sharp.Shared.HookParams;
+using Sharp.Shared.Listeners;
 using Sharp.Shared.Types;
 using Sharp.Shared.Units;
 
@@ -22,13 +23,14 @@ namespace Ashenfall.Core.Mobs;
 // and server-command handlers are all main-thread in ModSharp), so a plain Dictionary keyed
 // by EntityIndex is safe - no locking needed. The only asynchronous work is the loot
 // persistence call, which is fired via Task.Run *after* every game-object access is done.
-public sealed class MobManager
+public sealed class MobManager : IEntityListener
 {
     private sealed class ActiveMob
     {
-        public required MobDefinition Def   { get; init; }
-        public required MobSpawnPoint Point { get; init; }
-        public required int           Health { get; set; }
+        public required MobDefinition             Def    { get; init; }
+        public required MobSpawnPoint             Point  { get; init; }
+        public required int                       Health { get; set; }
+        public required CEntityHandle<IBaseEntity> Handle { get; init; }
     }
 
     private readonly ISharedSystem _shared;
@@ -64,6 +66,7 @@ public sealed class MobManager
     {
         _running = true;
         _shared.GetHookManager().EntityDispatchTraceAttack.InstallHookPre(OnEntityTraceAttack);
+        _shared.GetEntityManager().InstallEntityListener(this);
     }
 
     public void SpawnAll()
@@ -76,6 +79,7 @@ public sealed class MobManager
     {
         _running = false;
         _shared.GetHookManager().EntityDispatchTraceAttack.RemoveHookPre(OnEntityTraceAttack);
+        _shared.GetEntityManager().RemoveEntityListener(this);
 
         var entityManager = _shared.GetEntityManager();
         foreach (var index in _mobs.Keys)
@@ -83,6 +87,16 @@ public sealed class MobManager
 
         _mobs.Clear();
     }
+
+    // IEntityListener - prunes mobs the engine deletes out from under us (round restart,
+    // map change, etc.) so stale EntityIndex keys never linger in _mobs.
+    void IEntityListener.OnEntityDeleted(IBaseEntity entity)
+    {
+        _mobs.Remove(entity.Index);
+    }
+
+    int IEntityListener.ListenerVersion  => IEntityListener.ApiVersion;
+    int IEntityListener.ListenerPriority => 0;
 
     private void SpawnOne(MobSpawnPoint point)
     {
@@ -108,7 +122,13 @@ public sealed class MobManager
             return;
         }
 
-        _mobs[entity.Index] = new ActiveMob { Def = def, Point = point, Health = def.MaxHealth };
+        _mobs[entity.Index] = new ActiveMob
+        {
+            Def    = def,
+            Point  = point,
+            Health = def.MaxHealth,
+            Handle = entity.Handle,
+        };
     }
 
     private HookReturnValue<long> OnEntityTraceAttack(
@@ -118,8 +138,18 @@ public sealed class MobManager
         if (!_mobs.TryGetValue(param.Entity.Index, out var mob))
             return new HookReturnValue<long>();
 
+        // Belt-and-suspenders on top of the IEntityListener pruning above: if the index was
+        // reused for a different entity before we heard about the deletion, the handle won't
+        // match anymore - drop the stale entry and ignore the hit.
+        if (mob.Handle != param.Entity.Handle)
+        {
+            _mobs.Remove(param.Entity.Index);
+            return new HookReturnValue<long>();
+        }
+
         var attacker = _shared.GetEntityManager().FindEntityByHandle(param.AttackerHandle);
-        var client = attacker?.AsPlayerController()?.GetGameClient();
+        var client = attacker?.AsPlayerPawn()?.GetControllerAuto()?.GetGameClient()
+            ?? attacker?.AsPlayerController()?.GetGameClient();
         var session = client is null ? null : _sessions.Get(client);
 
         if (client is not null && session is not null)
@@ -177,6 +207,7 @@ public sealed class MobManager
         }
 
         var point = mob.Point;
-        _shared.GetModSharp().PushTimer(() => SpawnOne(point), point.RespawnSeconds);
+        _shared.GetModSharp().PushTimer(() => SpawnOne(point), point.RespawnSeconds,
+            GameTimerFlags.StopOnMapEnd);
     }
 }
