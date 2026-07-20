@@ -10,5 +10,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ashenfall.Domain\Ashenfall.Domain.csproj" />
+    <ProjectReference Include="..\Ashenfall.Data\Ashenfall.Data.csproj" />
   </ItemGroup>
 </Project>
