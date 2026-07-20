@@ -17,9 +17,11 @@ public class CharacterRepositoryTests
         Assert.Equal(1, created.Level);
         created.Level = 5;
         created.Gold = 123;
+        created.Class = "Vanguard";
         await repo.SaveAsync(created);
         var loaded = await repo.LoadAsync(steamId);
         Assert.Equal(5, loaded!.Level);
         Assert.Equal(123, loaded.Gold);
+        Assert.Equal("Vanguard", loaded.Class);
     }
 }

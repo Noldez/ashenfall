@@ -29,6 +29,6 @@ public sealed class CharacterRepository
     {
         await using var conn = await _db.OpenAsync();
         await conn.ExecuteAsync(
-            "UPDATE characters SET name = @Name, level = @Level, xp = @Xp, gold = @Gold WHERE steam_id = @SteamId", c);
+            "UPDATE characters SET name = @Name, class = @Class, level = @Level, xp = @Xp, gold = @Gold WHERE steam_id = @SteamId", c);
     }
 }
