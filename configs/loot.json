@@ -1,0 +1,9 @@
+{
+  "tables": {
+    "zone1": [
+      { "itemKey": "rusty_pistol", "rarity": "Common", "weight": 70 },
+      { "itemKey": "soldier_rifle", "rarity": "Uncommon", "weight": 25 },
+      { "itemKey": "ash_carbine", "rarity": "Rare", "weight": 5 }
+    ]
+  }
+}

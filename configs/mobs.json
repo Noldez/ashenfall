@@ -1,0 +1,17 @@
+{
+  "mobs": [
+    {
+      "key": "ash_zombie",
+      "name": "Ash Zombie",
+      "model": "characters/models/tm_phoenix/tm_phoenix.vmdl",
+      "maxHealth": 150,
+      "xpReward": 25,
+      "goldReward": 5,
+      "dropChance": 0.35,
+      "lootTable": "zone1"
+    }
+  ],
+  "spawnPoints": [
+    { "mob": "ash_zombie", "x": 0, "y": 0, "z": 0, "respawnSeconds": 15 }
+  ]
+}

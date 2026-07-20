@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using Ashenfall.Core.Mobs;
 using Ashenfall.Core.Sessions;
 using Ashenfall.Core.Ui;
 using Ashenfall.Data;
@@ -18,9 +19,13 @@ public sealed class AshenfallCore : IModSharpModule
 {
     private const string MenuManagerAssemblyName = "Sharp.Modules.MenuManager";
 
+    private const string SpawnMobsCommandName = "ash_spawnmobs";
+
     private readonly ISharedSystem _shared;
     private readonly CharacterRepository _characters;
+    private readonly ItemRepository _items;
     private readonly SessionManager _sessions;
+    private readonly MobManager _mobs;
 
     private IModSharpModuleInterface<IMenuManager>? _menuManager;
 
@@ -38,9 +43,16 @@ public sealed class AshenfallCore : IModSharpModule
         var cfgPath = Path.Combine(sharpPath, "configs", "ashenfall", "db.secrets.json");
         var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
         var connStr = doc.RootElement.GetProperty("ConnectionString").GetString()!;
-        _characters = new CharacterRepository(new Db(connStr));
+        var db = new Db(connStr);
+        _characters = new CharacterRepository(db);
+        _items = new ItemRepository(db);
         _sessions = new SessionManager(_shared, _characters,
             _shared.GetLoggerFactory().CreateLogger<SessionManager>());
+
+        var mobConfig = MobConfig.Load(Path.Combine(sharpPath, "configs", "ashenfall", "mobs.json"));
+        var lootTables = LootConfigLoader.Load(Path.Combine(sharpPath, "configs", "ashenfall", "loot.json"));
+        _mobs = new MobManager(_shared, _sessions, _items, mobConfig, lootTables, AwardXp,
+            _shared.GetLoggerFactory().CreateLogger<MobManager>());
     }
 
     public SessionManager Sessions => _sessions;
@@ -50,6 +62,11 @@ public sealed class AshenfallCore : IModSharpModule
         _shared.GetClientManager().InstallCommandCallback("rpg", OnRpgCommand);
         _shared.GetClientManager().InstallClientListener(_sessions);
         _autosaveTimer = _shared.GetModSharp().PushTimer(_sessions.SaveAll, 30.0, GameTimerFlags.Repeatable);
+
+        _mobs.Init();
+        _shared.GetConVarManager().CreateServerCommand(SpawnMobsCommandName, OnSpawnMobsCommand,
+            "Spawn Ashenfall mobs", ConVarFlags.Release);
+
         return true;
     }
 
@@ -73,6 +90,9 @@ public sealed class AshenfallCore : IModSharpModule
 
     public void Shutdown()
     {
+        _shared.GetConVarManager().ReleaseCommand(SpawnMobsCommandName);
+        _mobs.Clear();
+
         _shared.GetClientManager().RemoveCommandCallback("rpg", OnRpgCommand);
         _shared.GetClientManager().RemoveClientListener(_sessions);
         _shared.GetModSharp().StopTimer(_autosaveTimer);
@@ -118,6 +138,12 @@ public sealed class AshenfallCore : IModSharpModule
             client.Print(HudPrintChannel.Chat, $"[Ashenfall] Gold: {c.Gold}");
         }
 
+        return ECommandAction.Stopped;
+    }
+
+    private ECommandAction OnSpawnMobsCommand(StringCommand command)
+    {
+        _mobs.SpawnAll();
         return ECommandAction.Stopped;
     }
 

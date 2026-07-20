@@ -1,0 +1,182 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using Ashenfall.Core.Sessions;
+using Ashenfall.Data;
+using Ashenfall.Domain.Combat;
+using Ashenfall.Domain.Loot;
+using Microsoft.Extensions.Logging;
+using Sharp.Shared;
+using Sharp.Shared.Enums;
+using Sharp.Shared.GameEntities;
+using Sharp.Shared.HookParams;
+using Sharp.Shared.Types;
+using Sharp.Shared.Units;
+
+namespace Ashenfall.Core.Mobs;
+
+// Spawns configured mobs as prop_dynamic entities, tracks their health against an
+// EntityDispatchTraceAttack pre-hook, and handles death (XP/gold/loot) and respawn.
+//
+// All public members and the hook callback run on the game thread (hook dispatch, timers,
+// and server-command handlers are all main-thread in ModSharp), so a plain Dictionary keyed
+// by EntityIndex is safe - no locking needed. The only asynchronous work is the loot
+// persistence call, which is fired via Task.Run *after* every game-object access is done.
+public sealed class MobManager
+{
+    private sealed class ActiveMob
+    {
+        public required MobDefinition Def   { get; init; }
+        public required MobSpawnPoint Point { get; init; }
+        public required int           Health { get; set; }
+    }
+
+    private readonly ISharedSystem _shared;
+    private readonly SessionManager _sessions;
+    private readonly ItemRepository _items;
+    private readonly MobConfig _config;
+    private readonly IReadOnlyDictionary<string, LootTable> _lootTables;
+    private readonly Action<PlayerSession, long> _awardXp;
+    private readonly ILogger _logger;
+    private readonly Random _rng = new();
+    private readonly Dictionary<EntityIndex, ActiveMob> _mobs = new();
+
+    private bool _running;
+
+    public MobManager(ISharedSystem shared,
+        SessionManager sessions,
+        ItemRepository items,
+        MobConfig config,
+        IReadOnlyDictionary<string, LootTable> lootTables,
+        Action<PlayerSession, long> awardXp,
+        ILogger logger)
+    {
+        _shared = shared;
+        _sessions = sessions;
+        _items = items;
+        _config = config;
+        _lootTables = lootTables;
+        _awardXp = awardXp;
+        _logger = logger;
+    }
+
+    public void Init()
+    {
+        _running = true;
+        _shared.GetHookManager().EntityDispatchTraceAttack.InstallHookPre(OnEntityTraceAttack);
+    }
+
+    public void SpawnAll()
+    {
+        foreach (var point in _config.SpawnPoints)
+            SpawnOne(point);
+    }
+
+    public void Clear()
+    {
+        _running = false;
+        _shared.GetHookManager().EntityDispatchTraceAttack.RemoveHookPre(OnEntityTraceAttack);
+
+        var entityManager = _shared.GetEntityManager();
+        foreach (var index in _mobs.Keys)
+            entityManager.FindEntityByIndex(index)?.Kill();
+
+        _mobs.Clear();
+    }
+
+    private void SpawnOne(MobSpawnPoint point)
+    {
+        if (!_running) return;
+
+        if (!_config.Mobs.TryGetValue(point.Mob, out var def))
+        {
+            _logger.LogWarning("Unknown mob key '{Mob}' referenced by a spawn point", point.Mob);
+            return;
+        }
+
+        var keyValues = new Dictionary<string, KeyValuesVariantValueItem>
+        {
+            ["model"]  = def.Model,
+            ["origin"] = $"{point.X} {point.Y} {point.Z}",
+            ["solid"]  = 6, // SOLID_VPHYSICS
+        };
+
+        var entity = _shared.GetEntityManager().SpawnEntitySync("prop_dynamic", keyValues);
+        if (entity is null)
+        {
+            _logger.LogWarning("Failed to spawn mob '{Mob}'", point.Mob);
+            return;
+        }
+
+        _mobs[entity.Index] = new ActiveMob { Def = def, Point = point, Health = def.MaxHealth };
+    }
+
+    private HookReturnValue<long> OnEntityTraceAttack(
+        IEntityDispatchTraceAttackHookParams param,
+        HookReturnValue<long> current)
+    {
+        if (!_mobs.TryGetValue(param.Entity.Index, out var mob))
+            return new HookReturnValue<long>();
+
+        var attacker = _shared.GetEntityManager().FindEntityByHandle(param.AttackerHandle);
+        var client = attacker?.AsPlayerController()?.GetGameClient();
+        var session = client is null ? null : _sessions.Get(client);
+
+        if (client is not null && session is not null)
+        {
+            var result = DamageCalculator.PlayerToMob(param.Damage, session.Stats,
+                param.HitGroup == HitGroupType.Head, _rng);
+            var applied = (int)MathF.Round(result.Damage, MidpointRounding.AwayFromZero);
+            mob.Health -= applied;
+
+            client.Print(HudPrintChannel.Center,
+                $"{applied}{(result.IsCrit ? " CRIT" : "")}");
+
+            if (mob.Health <= 0)
+                HandleDeath(param.Entity, mob, session);
+        }
+
+        // Mobs manage their own health entirely on our side - always skip the engine's
+        // own damage-application path for entities we are tracking.
+        return new HookReturnValue<long>(EHookAction.SkipCallReturnOverride);
+    }
+
+    private void HandleDeath(IBaseEntity entity, ActiveMob mob, PlayerSession session)
+    {
+        _mobs.Remove(entity.Index);
+        entity.Kill();
+
+        _awardXp(session, mob.Def.XpReward);
+        session.Character.Gold += mob.Def.GoldReward;
+        session.Client.Print(HudPrintChannel.Chat,
+            $"[Ashenfall] {mob.Def.Name} slain! +{mob.Def.XpReward} XP, +{mob.Def.GoldReward} gold");
+
+        if (_lootTables.TryGetValue(mob.Def.LootTable, out var table))
+        {
+            var drop = table.Roll(mob.Def.DropChance, _rng);
+            if (drop is not null)
+            {
+                session.Client.Print(HudPrintChannel.Chat,
+                    $"[Ashenfall] Loot: [{drop.Rarity}] {drop.ItemKey}");
+
+                var steamId = session.Character.SteamId;
+                var itemKey = drop.ItemKey;
+                var rarity = drop.Rarity.ToString();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _items.AddDropAsync(steamId, itemKey, rarity);
+                    }
+                    catch (Exception e)
+                    {
+                        _logger.LogError(e, "Failed to persist loot drop for {SteamId}", steamId);
+                    }
+                });
+            }
+        }
+
+        var point = mob.Point;
+        _shared.GetModSharp().PushTimer(() => SpawnOne(point), point.RespawnSeconds);
+    }
+}
