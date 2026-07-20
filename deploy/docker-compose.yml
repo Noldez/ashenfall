@@ -24,14 +24,14 @@ services:
     environment:
       SRCDS_TOKEN: ${GSLT}
       CS2_SERVERNAME: "Ashenfall RPG [LT]"
-      CS2_PORT: "27015"
+      CS2_PORT: "27815"
       CS2_RCONPW: ${RCON_PASSWORD}
       CS2_MAXPLAYERS: "64"
       CS2_STARTMAP: "de_dust2"
       CS2_ADDITIONAL_ARGS: ""
     ports:
-      - "27015:27015/tcp"
-      - "27015:27015/udp"
+      - "27815:27815/tcp"
+      - "27815:27815/udp"
     volumes:
       - /opt/ashenfall/cs2-data:/home/steam/cs2-dedicated/
     depends_on:
