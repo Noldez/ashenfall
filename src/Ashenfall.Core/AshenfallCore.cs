@@ -122,7 +122,7 @@ public sealed class AshenfallCore : IModSharpModule
 
         if (_menuManager?.Instance is { } menus)
         {
-            RpgMenu.Show(client, session, menus);
+            RpgMenu.Show(client, session, menus, _items, action => _shared.GetModSharp().InvokeAction(action));
         }
         else
         {

@@ -1,4 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
 using Ashenfall.Core.Sessions;
+using Ashenfall.Data;
+using Ashenfall.Domain.Loot;
 using Ashenfall.Domain.Progression;
 using Sharp.Modules.MenuManager.Shared;
 using Sharp.Shared.Enums;
@@ -8,9 +13,11 @@ namespace Ashenfall.Core.Ui;
 
 public static class RpgMenu
 {
-    public static void Show(IGameClient client, PlayerSession session, IMenuManager menus)
+    public static void Show(IGameClient client, PlayerSession session, IMenuManager menus, ItemRepository items,
+        Action<Action> mainThreadInvoke)
     {
         var c = session.Character;
+        var steamId = c.SteamId;
         var toNext = c.Level >= XpCurve.MaxLevel ? 0 : XpCurve.XpForLevel(c.Level) - c.Xp;
         var menu = Menu.Create()
             .Title("Ashenfall")
@@ -19,11 +26,67 @@ public static class RpgMenu
             .DisabledItem($"Gold: {c.Gold}")
             .Item("Inventory", ctrl =>
             {
-                ctrl.Client.Print(HudPrintChannel.Chat, "[Ashenfall] Inventory opens in Task 14.");
-                ctrl.Exit();
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        var owned = await items.ListAsync(steamId);
+
+                        // Marshal back to the main thread before touching IGameClient or the menu manager -
+                        // the player may have disconnected or closed the menu while the DB call was in flight.
+                        mainThreadInvoke(() =>
+                        {
+                            if (!client.IsValid) return;
+
+                            var inv = BuildInventoryMenu(owned, client, session, menus, items, mainThreadInvoke);
+                            menus.DisplayMenu(client, inv);
+                        });
+                    }
+                    catch (Exception)
+                    {
+                        mainThreadInvoke(() =>
+                        {
+                            if (!client.IsValid) return;
+                            client.Print(HudPrintChannel.Chat, "[Ashenfall] Failed to load inventory, try again shortly.");
+                        });
+                    }
+                });
             })
             .ExitItem()
             .Build();
         menus.DisplayMenu(client, menu);
+    }
+
+    private static Menu BuildInventoryMenu(IReadOnlyList<OwnedItem> owned, IGameClient client, PlayerSession session,
+        IMenuManager menus, ItemRepository items, Action<Action> mainThreadInvoke)
+    {
+        var builder = Menu.Create().Title($"Inventory ({owned.Count})");
+
+        if (owned.Count == 0)
+        {
+            builder.DisabledItem("Empty. Go kill something.");
+        }
+        else
+        {
+            foreach (var item in owned)
+            {
+                var label = item.EnhanceLevel > 0
+                    ? $"[{item.Rarity}] {item.ItemKey} +{item.EnhanceLevel}"
+                    : $"[{item.Rarity}] {item.ItemKey}";
+                var color = Enum.TryParse<Rarity>(item.Rarity, out var rarity) ? RarityColors.Hex(rarity) : null;
+
+                builder.Item((IGameClient _, ref MenuItemContext ctx) =>
+                {
+                    ctx.Title = label;
+                    ctx.Color = color;
+                });
+            }
+        }
+
+        // DisplayMenu() always starts a fresh menu session for the client (see MenuManager.DisplayMenu),
+        // so there is no parent to GoBack() to here. Re-display the main menu instead.
+        builder.Item("Back", _ => Show(client, session, menus, items, mainThreadInvoke));
+
+        return builder.Build();
     }
 }
