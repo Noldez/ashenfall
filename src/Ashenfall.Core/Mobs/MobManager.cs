@@ -140,6 +140,10 @@ public sealed class MobManager : IEntityListener, IGameListener
             return;
         }
 
+        // Player models do not reliably apply via the "model" keyvalue on prop_dynamic;
+        // setting it again post-spawn makes the engine actually use it.
+        entity.SetModel(def.Model);
+
         _mobs[entity.Index] = new ActiveMob
         {
             Def    = def,
