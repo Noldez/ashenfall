@@ -5,6 +5,7 @@ using Ashenfall.Core.Sessions;
 using Ashenfall.Data;
 using Ashenfall.Domain.Loot;
 using Ashenfall.Domain.Progression;
+using Microsoft.Extensions.Logging;
 using Sharp.Modules.MenuManager.Shared;
 using Sharp.Shared.Enums;
 using Sharp.Shared.Objects;
@@ -14,7 +15,7 @@ namespace Ashenfall.Core.Ui;
 public static class RpgMenu
 {
     public static void Show(IGameClient client, PlayerSession session, IMenuManager menus, ItemRepository items,
-        Action<Action> mainThreadInvoke)
+        Action<Action> mainThreadInvoke, ILogger logger)
     {
         var c = session.Character;
         var steamId = c.SteamId;
@@ -38,12 +39,13 @@ public static class RpgMenu
                         {
                             if (!client.IsValid) return;
 
-                            var inv = BuildInventoryMenu(owned, client, session, menus, items, mainThreadInvoke);
+                            var inv = BuildInventoryMenu(owned, client, session, menus, items, mainThreadInvoke, logger);
                             menus.DisplayMenu(client, inv);
                         });
                     }
-                    catch (Exception)
+                    catch (Exception e)
                     {
+                        logger.LogError(e, "Failed to load inventory for {SteamId}", steamId);
                         mainThreadInvoke(() =>
                         {
                             if (!client.IsValid) return;
@@ -58,7 +60,7 @@ public static class RpgMenu
     }
 
     private static Menu BuildInventoryMenu(IReadOnlyList<OwnedItem> owned, IGameClient client, PlayerSession session,
-        IMenuManager menus, ItemRepository items, Action<Action> mainThreadInvoke)
+        IMenuManager menus, ItemRepository items, Action<Action> mainThreadInvoke, ILogger logger)
     {
         var builder = Menu.Create().Title($"Inventory ({owned.Count})");
 
@@ -79,13 +81,16 @@ public static class RpgMenu
                 {
                     ctx.Title = label;
                     ctx.Color = color;
+                    // Rows need an action or the renderer treats them as disabled, which
+                    // suppresses the Color override above - a no-op keeps rarity colors visible.
+                    ctx.Action = _ => { };
                 });
             }
         }
 
         // DisplayMenu() always starts a fresh menu session for the client (see MenuManager.DisplayMenu),
         // so there is no parent to GoBack() to here. Re-display the main menu instead.
-        builder.Item("Back", _ => Show(client, session, menus, items, mainThreadInvoke));
+        builder.Item("Back", _ => Show(client, session, menus, items, mainThreadInvoke, logger));
 
         return builder.Build();
     }

@@ -26,6 +26,7 @@ public sealed class AshenfallCore : IModSharpModule
     private readonly ItemRepository _items;
     private readonly SessionManager _sessions;
     private readonly MobManager _mobs;
+    private readonly ILogger _logger;
 
     private IModSharpModuleInterface<IMenuManager>? _menuManager;
 
@@ -39,6 +40,7 @@ public sealed class AshenfallCore : IModSharpModule
         bool hotReload)
     {
         _shared = sharedSystem;
+        _logger = _shared.GetLoggerFactory().CreateLogger<AshenfallCore>();
 
         var cfgPath = Path.Combine(sharpPath, "configs", "ashenfall", "db.secrets.json");
         var doc = JsonDocument.Parse(File.ReadAllText(cfgPath));
@@ -61,7 +63,8 @@ public sealed class AshenfallCore : IModSharpModule
     {
         _shared.GetClientManager().InstallCommandCallback("rpg", OnRpgCommand);
         _shared.GetClientManager().InstallClientListener(_sessions);
-        _autosaveTimer = _shared.GetModSharp().PushTimer(_sessions.SaveAll, 30.0, GameTimerFlags.Repeatable);
+        _autosaveTimer = _shared.GetModSharp().PushTimer(() => _ = _sessions.SaveAll(), 30.0,
+            GameTimerFlags.Repeatable);
 
         _mobs.Init();
         _shared.GetConVarManager().CreateServerCommand(SpawnMobsCommandName, OnSpawnMobsCommand,
@@ -96,7 +99,16 @@ public sealed class AshenfallCore : IModSharpModule
         _shared.GetClientManager().RemoveCommandCallback("rpg", OnRpgCommand);
         _shared.GetClientManager().RemoveClientListener(_sessions);
         _shared.GetModSharp().StopTimer(_autosaveTimer);
-        _sessions.SaveAll();
+
+        try
+        {
+            if (!_sessions.SaveAll().Wait(TimeSpan.FromSeconds(5)))
+                _logger.LogWarning("Character save did not complete within the shutdown timeout");
+        }
+        catch (Exception e)
+        {
+            _logger.LogError(e, "Character save failed during shutdown");
+        }
     }
 
     public void AwardXp(Sessions.PlayerSession s, long amount)
@@ -122,7 +134,8 @@ public sealed class AshenfallCore : IModSharpModule
 
         if (_menuManager?.Instance is { } menus)
         {
-            RpgMenu.Show(client, session, menus, _items, action => _shared.GetModSharp().InvokeAction(action));
+            RpgMenu.Show(client, session, menus, _items, action => _shared.GetModSharp().InvokeAction(action),
+                _logger);
         }
         else
         {
