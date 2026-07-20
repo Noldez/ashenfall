@@ -23,7 +23,7 @@ namespace Ashenfall.Core.Mobs;
 // and server-command handlers are all main-thread in ModSharp), so a plain Dictionary keyed
 // by EntityIndex is safe - no locking needed. The only asynchronous work is the loot
 // persistence call, which is fired via Task.Run *after* every game-object access is done.
-public sealed class MobManager : IEntityListener
+public sealed class MobManager : IEntityListener, IGameListener
 {
     private sealed class ActiveMob
     {
@@ -67,6 +67,7 @@ public sealed class MobManager : IEntityListener
         _running = true;
         _shared.GetHookManager().EntityDispatchTraceAttack.InstallHookPre(OnEntityTraceAttack);
         _shared.GetEntityManager().InstallEntityListener(this);
+        _shared.GetModSharp().InstallGameListener(this);
     }
 
     public void SpawnAll()
@@ -80,6 +81,7 @@ public sealed class MobManager : IEntityListener
         _running = false;
         _shared.GetHookManager().EntityDispatchTraceAttack.RemoveHookPre(OnEntityTraceAttack);
         _shared.GetEntityManager().RemoveEntityListener(this);
+        _shared.GetModSharp().RemoveGameListener(this);
 
         var entityManager = _shared.GetEntityManager();
         foreach (var index in _mobs.Keys)
@@ -97,6 +99,22 @@ public sealed class MobManager : IEntityListener
 
     int IEntityListener.ListenerVersion  => IEntityListener.ApiVersion;
     int IEntityListener.ListenerPriority => 0;
+
+    // IGameListener - mob models must be precached at map load or props render as the
+    // red ERROR placeholder (player models are not otherwise precached on every map).
+    void IGameListener.OnResourcePrecache()
+    {
+        var modSharp = _shared.GetModSharp();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var def in _config.Mobs.Values)
+        {
+            if (seen.Add(def.Model))
+                modSharp.PrecacheResource(def.Model);
+        }
+    }
+
+    int IGameListener.ListenerVersion  => IGameListener.ApiVersion;
+    int IGameListener.ListenerPriority => 0;
 
     private void SpawnOne(MobSpawnPoint point)
     {
