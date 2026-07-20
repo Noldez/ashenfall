@@ -1,0 +1,23 @@
+# Internal design docs (kept out of the public repo)
+docs/
+
+# Secrets and local configuration
+.env
+.env.*
+*.secrets.json
+appsettings.local.json
+
+# .NET build output
+bin/
+obj/
+publish/
+*.user
+
+# IDE
+.vs/
+.idea/
+*.suo
+
+# OS
+Thumbs.db
+.DS_Store
