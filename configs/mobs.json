@@ -12,6 +12,10 @@
     }
   ],
   "spawnPoints": [
-    { "mob": "ash_zombie", "x": 0, "y": 0, "z": 0, "respawnSeconds": 15 }
+    { "mob": "ash_zombie", "x": -980, "y": -754, "z": 120, "respawnSeconds": 15 },
+    { "mob": "ash_zombie", "x": -1100, "y": -650, "z": 120, "respawnSeconds": 15 },
+    { "mob": "ash_zombie", "x": -850, "y": -600, "z": 120, "respawnSeconds": 15 },
+    { "mob": "ash_zombie", "x": -1050, "y": -860, "z": 120, "respawnSeconds": 20 },
+    { "mob": "ash_zombie", "x": -880, "y": -880, "z": 120, "respawnSeconds": 20 }
   ]
 }
